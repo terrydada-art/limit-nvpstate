@@ -6,6 +6,10 @@ This program acts as a lightweight alternative to NVIDIA Inspector's "Multi-Disp
 
 Place the program folder somewhere safe and enable "Add To Startup" in the File menu. Populate the process exclusion list with applications you do not wish P-States to be limited for while the application's window is in the foreground.
 
+Use the **Enable/Disable Limit** button in the main window to instantly turn the NVIDIA P-State limit on or off with one click.
+
+The main window now also shows a live **Status** indicator (`Enabled (已啟用)` / `Disabled (已停用)`), and the tray icon tooltip mirrors the same state text.
+
 Note that closing the application by clicking "exit" in the tray menu will unlimit P-States before closing. If the program ends abruptly (ending the process in task manager), the unlimit action will not be executed when exiting.
 
 Disclaimer: applications running in fullscreen mode (legacy flip), may not be detected when in the foreground. If this occurs, switch the unlimit trigger to running processes instead.
