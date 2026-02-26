@@ -12,9 +12,11 @@
 
 std::unordered_set<std::string> cachedProcessExceptions;
 NvPhysicalGpuHandle hPhysicalGpus[NVAPI_MAX_PHYSICAL_GPUS];
-HWINEVENTHOOK eventHook;
+HWINEVENTHOOK eventHook = nullptr;
 std::string unlimitTriggers[] = { "Process Running", "Process Foreground" };
 std::atomic<bool> isThreadRunning(true); // control process running thread
+std::atomic<bool> isProcessRunningTriggerActive(false);
+std::atomic<bool> isProcessForegroundTriggerActive(false);
 
 void WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild, DWORD dwEventThread, DWORD dwmsEventTime) {
     // this corrects the hwnd after a EVENT_SYSTEM_FOREGROUND event
@@ -32,6 +34,7 @@ void WinEventProc(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LON
         QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
         exit(1);
     }
+
 }
 
 void pollProcesses() {
@@ -170,13 +173,21 @@ limitnvpstate::limitnvpstate(QWidget* parent) : QMainWindow(parent) {
     }
 
     int triggerCount = sizeof(unlimitTriggers) / sizeof(unlimitTriggers[0]);
-    if (config["unlimit_trigger"] < 0 || config["unlimit_trigger"] > triggerCount) {
+    if (config["unlimit_trigger"] < 0 || config["unlimit_trigger"] >= triggerCount) {
         QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Invalid unlimit_trigger index in config");
         exit(1);
     }
 
     ui.unlimitTrigger->setCurrentIndex(config["unlimit_trigger"]);
     connect(ui.unlimitTrigger, SIGNAL(currentIndexChanged(int)), this, SLOT(unlimitTriggerChanged(int)));
+
+    ui.togglePStateLimit->setCheckable(true);
+    ui.togglePStateLimit->setChecked(isPStateLimitEnabled);
+    updateToggleButtonText(isPStateLimitEnabled);
+    updatePStateLimitStatus(isPStateLimitEnabled);
+    connect(ui.togglePStateLimit, &QPushButton::clicked, [this]() {
+        togglePStateLimit();
+        });
 
     // add process button
     for (std::string processException : config["process_exceptions"]) {
@@ -200,21 +211,16 @@ limitnvpstate::limitnvpstate(QWidget* parent) : QMainWindow(parent) {
         saveProcessExceptions();
         });
 
-    // limit p-state initially
-    if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], false, config["pstate_limit"]) != 0) {
-        QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
-        exit(1);
-    }
-
-    if (config["unlimit_trigger"] == 0) {
-        setupProcessRunningTrigger();
-    } else if (config["unlimit_trigger"] == 1) {
-        setupProcessForegroundTrigger();
-    }
+    applyPStateLimitState(isPStateLimitEnabled);
 }
 
 void limitnvpstate::setupProcessRunningTrigger() {
+    if (isProcessRunningTriggerActive) {
+        return;
+    }
+
     isThreadRunning = true;
+    isProcessRunningTriggerActive = true;
     std::thread thread(pollProcesses);
     thread.detach();
     //if (thread.joinable()) {
@@ -223,22 +229,88 @@ void limitnvpstate::setupProcessRunningTrigger() {
 }
 
 void limitnvpstate::stopProcessRunningTrigger() {
+    if (!isProcessRunningTriggerActive) {
+        return;
+    }
+
     isThreadRunning = false;
+    isProcessRunningTriggerActive = false;
 }
 
 void limitnvpstate::setupProcessForegroundTrigger() {
+    if (isProcessForegroundTriggerActive) {
+        return;
+    }
+
     eventHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, NULL, WinEventProc, 0, 0, WINEVENT_OUTOFCONTEXT);
 
     if (!eventHook) {
         QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to configure global hook");
         exit(1);
     }
+
+    isProcessForegroundTriggerActive = true;
 }
 
 void limitnvpstate::stopProcessForegroundTrigger() {
+    if (!isProcessForegroundTriggerActive) {
+        return;
+    }
+
     if (!UnhookWinEvent(eventHook)) {
         QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to unhook global hook");
         exit(1);
+    }
+
+    eventHook = nullptr;
+    isProcessForegroundTriggerActive = false;
+}
+
+
+void limitnvpstate::setupUnlimitTrigger() {
+    if (config["unlimit_trigger"] == 0) {
+        setupProcessRunningTrigger();
+    } else if (config["unlimit_trigger"] == 1) {
+        setupProcessForegroundTrigger();
+    }
+}
+
+void limitnvpstate::stopUnlimitTrigger() {
+    if (config["unlimit_trigger"] == 0) {
+        stopProcessRunningTrigger();
+    } else if (config["unlimit_trigger"] == 1) {
+        stopProcessForegroundTrigger();
+    }
+}
+
+void limitnvpstate::updateToggleButtonText(bool isEnabled) {
+    ui.togglePStateLimit->setText(isEnabled ? "Disable Limit" : "Enable Limit");
+}
+
+void limitnvpstate::updatePStateLimitStatus(bool isEnabled) {
+    const QString stateText = isEnabled ? "Enabled (已啟用)" : "Disabled (已停用)";
+    ui.pStateLimitStatusValue->setText(stateText);
+
+    if (trayIcon) {
+        trayIcon->setToolTip(QString("limit-nvpstate\nP-State Limit: %1").arg(stateText));
+    }
+}
+
+void limitnvpstate::applyPStateLimitState(bool isEnabled) {
+    if (isEnabled) {
+        if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], false, config["pstate_limit"]) != 0) {
+            QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
+            exit(1);
+        }
+
+        setupUnlimitTrigger();
+    } else {
+        stopUnlimitTrigger();
+
+        if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], true) != 0) {
+            QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
+            exit(1);
+        }
     }
 }
 
@@ -252,7 +324,7 @@ void limitnvpstate::createTrayIcon() {
     trayMenu->addAction(trayActionExit);
 
     // create icon
-    auto trayIcon = new QSystemTrayIcon(this);
+    trayIcon = new QSystemTrayIcon(this);
     trayIcon->setContextMenu(trayMenu);
     trayIcon->setIcon(QIcon(":/limitnvpstate/icon.ico"));
     trayIcon->show();
@@ -270,24 +342,16 @@ void limitnvpstate::createTrayIcon() {
 }
 
 void limitnvpstate::unlimitTriggerChanged(int index) {
-    // clean up previous trigger method
-    int prevUnlimitTriggerIndex = config["unlimit_trigger"];
-
-    if (prevUnlimitTriggerIndex == 0) {
-        stopProcessRunningTrigger();
-    } else if (prevUnlimitTriggerIndex == 1) {
-        stopProcessForegroundTrigger();
-    }
-
-    // setup new trigger method
-    if (index == 0) {
-        setupProcessRunningTrigger();
-    } else if (index == 1) {
-        setupProcessForegroundTrigger();
+    if (isPStateLimitEnabled) {
+        stopUnlimitTrigger();
     }
 
     config["unlimit_trigger"] = index;
     saveConfig();
+
+    if (isPStateLimitEnabled) {
+        setupUnlimitTrigger();
+    }
 }
 
 void limitnvpstate::selectedGPUChanged(int index) {
@@ -306,9 +370,11 @@ void limitnvpstate::selectedGPUChanged(int index) {
     // get available P-States for new GPU selection
     getAvailablePStates();
 
-    if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], false, config["pstate_limit"]) != 0) {
-        QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
-        exit(1);
+    if (isPStateLimitEnabled) {
+        if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], false, config["pstate_limit"]) != 0) {
+            QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
+            exit(1);
+        }
     }
 }
 
@@ -326,10 +392,19 @@ void limitnvpstate::selectedPStateChanged(int index) {
     // this can be interpreted as setting P0 before switching to the new P-State limit
     isPStateUnlimited = true;
 
-    if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], false, config["pstate_limit"]) != 0) {
-        QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
-        exit(1);
+    if (isPStateLimitEnabled) {
+        if (setPState(hPhysicalGpus[ui.selectedGPU->currentIndex()], false, config["pstate_limit"]) != 0) {
+            QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
+            exit(1);
+        }
     }
+}
+
+void limitnvpstate::togglePStateLimit() {
+    isPStateLimitEnabled = ui.togglePStateLimit->isChecked();
+    applyPStateLimitState(isPStateLimitEnabled);
+    updateToggleButtonText(isPStateLimitEnabled);
+    updatePStateLimitStatus(isPStateLimitEnabled);
 }
 
 void limitnvpstate::saveProcessExceptions() {
@@ -409,7 +484,7 @@ void limitnvpstate::getAvailablePStates() {
     NV_GPU_PERF_PSTATES20_INFO pStatesInfo;
     pStatesInfo.version = NV_GPU_PERF_PSTATES20_INFO_VER;
 
-    if (NvAPI_GPU_GetPstates20(hPhysicalGpus[0], &pStatesInfo) != 0) {
+    if (NvAPI_GPU_GetPstates20(hPhysicalGpus[ui.selectedGPU->currentIndex()], &pStatesInfo) != 0) {
         QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to obtain available P-States");
         exit(1);
     }
@@ -448,10 +523,8 @@ void limitnvpstate::exitApp(int exitCode) {
     }
 
     // cleanup
-    if (config["unlimit_trigger"] == 0) {
-        stopProcessRunningTrigger();
-    } else if (config["unlimit_trigger"] == 1) {
-        stopProcessForegroundTrigger();
+    if (isPStateLimitEnabled) {
+        stopUnlimitTrigger();
     }
 
     exit(exitCode);
