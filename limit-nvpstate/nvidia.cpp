@@ -42,7 +42,7 @@ int NvAPI_GPU_SetPstateClientLimits(NvPhysicalGpuHandle hPhysicalGpu, unsigned i
     return (*pointer)(hPhysicalGpu, pstateType, pStateLimit);
 }
 
-int setPState(NvPhysicalGpuHandle hPhysicalGpu, bool isUnlimit, unsigned int pStateLimit = 0) {
+int setPState(NvPhysicalGpuHandle hPhysicalGpu, bool isUnlimit, unsigned int pStateLimit) {
     if (isUnlimit && !isPStateUnlimited) {
         if (NvAPI_GPU_SetPstateClientLimits(hPhysicalGpu, 3, 0) != 0) {
             std::cerr << "error: NvAPI_SetPstateClientLimits failed\n";

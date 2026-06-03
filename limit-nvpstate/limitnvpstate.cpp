@@ -41,12 +41,12 @@ void pollProcesses() {
         HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
         if (!hSnapshot) {
-            QMessageBox::critical(nullptr, "limit-nvpstate", "Error: CreateToolhelp32Snapshot failed");
+            std::cerr << "error: CreateToolhelp32Snapshot failed\n";
             exit(1);
         }
 
         std::string processName = "";
-        unsigned long processId = -1;
+        unsigned long processId = 0;
 
         PROCESSENTRY32 processEntry;
         processEntry.dwSize = sizeof(PROCESSENTRY32);
@@ -69,12 +69,12 @@ void pollProcesses() {
         CloseHandle(hSnapshot);
 
         if (setPState(hPhysicalGpus[config["gpu_index"]], isUnlimit, config["pstate_limit"]) != 0) {
-            QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to set P-State");
+            std::cerr << "error: Failed to set P-State\n";
             exit(1);
         }
 
         // wait for process to exit
-        if (processId >= 0) {
+        if (isUnlimit) {
             HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, processId);
 
             if (hProcess) {
@@ -85,8 +85,6 @@ void pollProcesses() {
             } else {
                 std::cerr << "info: failed to open process: " << processName << " \n";
             }
-        } else {
-            std::cerr << "info: failed to get PID: " << processName << " \n";
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(config["process_running_polling"]));
@@ -152,7 +150,7 @@ limitnvpstate::limitnvpstate(QWidget* parent) : QMainWindow(parent) {
         ui.selectedGPU->addItem(gpuFullName);
     }
 
-    if (!(config["gpu_index"] >= (gpuCount - 1) && config["gpu_index"] <= (gpuCount - 1))) {
+    if (config["gpu_index"] < 0 || config["gpu_index"] >= gpuCount) {
         config["gpu_index"] = 0;
         saveConfig();
     }
@@ -409,7 +407,7 @@ void limitnvpstate::getAvailablePStates() {
     NV_GPU_PERF_PSTATES20_INFO pStatesInfo;
     pStatesInfo.version = NV_GPU_PERF_PSTATES20_INFO_VER;
 
-    if (NvAPI_GPU_GetPstates20(hPhysicalGpus[0], &pStatesInfo) != 0) {
+    if (NvAPI_GPU_GetPstates20(hPhysicalGpus[config["gpu_index"]], &pStatesInfo) != 0) {
         QMessageBox::critical(nullptr, "limit-nvpstate", "Error: Failed to obtain available P-States");
         exit(1);
     }
