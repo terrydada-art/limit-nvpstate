@@ -23,7 +23,7 @@ jobs:
 
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
-      QtMsBuild: ${{ github.workspace }}\QtMSBuild
+      QtMsBuild: ${{ github.workspace }}\QtMsBuild
 
     steps:
       - name: Checkout repository

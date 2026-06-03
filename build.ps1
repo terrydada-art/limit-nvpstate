@@ -19,7 +19,7 @@ function main() {
     mkdir ".\build\limit-nvpstate\"
 
     # build application
-    MSBuild.exe ".\limit-nvpstate.sln" -p:Configuration=Release -p:Platform=x64
+    MSBuild.exe ".\limit-nvpstate.sln" -p:Configuration=Release -p:Platform=x64 -p:QtMsBuild="$PWD\QtMsBuild"
 
     # create final package
     Copy-Item ".\x64\Release\limit-nvpstate.exe" ".\build\limit-nvpstate\"
